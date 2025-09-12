@@ -1,0 +1,85 @@
+name: selfheal-deploy
+on:
+  workflow_call:
+    inputs:
+      service: { required: true, type: string }
+      stage:   { required: true, type: string, default: "dev1" }
+    secrets: {}
+permissions:
+  id-token: write
+  contents: read
+  issues: write
+env: { AWS_REGION: eu-west-1 }
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::356975127435:role/GitHubOIDC-ServerlessDeploy
+          aws-region: ${{ env.AWS_REGION }}
+          output-env-credentials: true
+      - run: npm i -g serverless@3 serverless-python-requirements
+
+      - name: Serverless deploy
+        working-directory: services/${{ inputs.service }}
+        env: { STAGE: ${{ inputs.stage }} }
+        run: |
+          set -e
+          rm -rf .serverless || true
+          sls deploy --stage "$STAGE" --verbose
+
+      - name: Smoke (Outputs -> Name -> Resources)
+        id: smoke
+        env:
+          SVC:   ${{ inputs.service }}
+          STAGE: ${{ inputs.stage }}
+        run: |
+          set -e
+          keb="${SVC//_/-}"
+          STACK="dtsbuz-$keb-$STAGE"
+          PATHNAME="/$SVC"; [ "$SVC" = "menu" ] && PATHNAME="/menu"
+
+          API_ID=$(aws cloudformation describe-stacks --stack-name "$STACK" \
+            --query "Stacks[0].Outputs[?contains(OutputKey,\`HttpApi\`) || contains(OutputKey,\`ApiEndpoint\`) || contains(OutputKey,\`ServiceEndpoint\`)].OutputValue | [0]" \
+            --output text 2>/dev/null || true)
+          if [ -z "$API_ID" ] || [ "$API_ID" = "None" ]; then
+            API_ID=$(aws apigatewayv2 get-apis --query "Items[?Name==\`dtsbuz-${keb}-${STAGE}\`].ApiId | [0]" --output text 2>/dev/null || true)
+          fi
+          if [ -z "$API_ID" ] || [ "$API_ID" = "None" ]; then
+            API_ID=$(aws cloudformation describe-stack-resources --stack-name "$STACK" \
+              --query 'StackResources[?ResourceType==`AWS::ApiGatewayV2::Api`].PhysicalResourceId' \
+              --output text 2>/dev/null | head -n1 || true)
+          fi
+          if [ -z "$API_ID" ] || [ "$API_ID" = "None" ]; then
+            echo "::error::API not found for $SVC"
+            exit 1
+          fi
+          BASE="https://${API_ID}.execute-api.${AWS_REGION}.amazonaws.com"
+          URL="${BASE}${PATHNAME}?restaurant=r1"
+          code=$(curl -s -o /tmp/out.json -w "%{http_code}" "$URL" || true)
+          echo "HTTP $code"; cat /tmp/out.json || true
+          [ "$code" -eq 200 ]
+
+      - name: Close smoke issue on success
+        env: { GH_TOKEN: ${{ github.token }} }
+        run: |
+          PATH_LABEL="path:services/${{ inputs.service }}"
+          NUM=$(gh issue list --state open --label 'from:smoke' --label "$PATH_LABEL" \
+            --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -n "${NUM:-}" ]; then
+            gh issue comment "$NUM" -b "✅ Smoke green on rerun. Closing." || true
+            gh issue close "$NUM" || true
+          fi
+
+      - name: On failure: open/update smoke + trigger agent
+        if: ${{ failure() }}
+        uses: ./.github/actions/self-heal
+        with:
+          service:    ${{ inputs.service }}
+          stage:      ${{ inputs.stage }}
+          stack:      dtsbuz-${{ inputs.service && inputs.service || 'unknown' }}-${{ inputs.stage }}
+          aws-region: ${{ env.AWS_REGION }}
+          path-label: path:services/${{ inputs.service }}

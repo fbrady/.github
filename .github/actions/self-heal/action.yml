@@ -1,0 +1,76 @@
+name: self-heal/open-issue-and-trigger-agent
+description: "Open/update smoke issue with diagnostics and trigger agent-exec"
+inputs:
+  service:   { required: true }
+  stage:     { required: true }
+  stack:     { required: true }
+  aws-region:{ required: true, default: "eu-west-1" }
+  path-label:{ required: true }
+runs:
+  using: "composite"
+  steps:
+    - shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        SVC="${{ inputs.service }}"; STAGE="${{ inputs.stage }}"
+        STACK="${{ inputs.stack }}"; AWS_REGION="${{ inputs.aws-region }}"
+        PATH_LABEL="${{ inputs.path-label }}"
+        TITLE="SMOKE FAIL: ${SVC} (${STAGE})"
+
+        TMP="$(mktemp)"
+        {
+          echo "### Deploy smoke failed"
+          echo "- Service: **$SVC**  (path: \`services/$SVC\`)"
+          echo "- Stage: **$STAGE**"
+          echo "- Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          echo
+          echo "#### CloudFormation events (last 20)"
+          echo '```'
+          aws cloudformation describe-stack-events --stack-name "$STACK" --max-items 20 \
+            --query 'StackEvents[].{Time:Timestamp,Status:ResourceStatus,Type:ResourceType,Reason:ResourceStatusReason}' \
+            --output table || true
+          echo '```'
+          echo
+          echo "#### Lambda handler & recent logs"
+          FUNC=$(aws cloudformation describe-stack-resources --stack-name "$STACK" \
+            --query 'StackResources[?ResourceType==`AWS::Lambda::Function`].PhysicalResourceId' \
+            --output text 2>/dev/null | head -n1 || true)
+          echo "- Function: \`$FUNC\`"
+          echo "- Handler:"
+          echo '```'
+          [ -n "${FUNC:-}" ] && aws lambda get-function-configuration --function-name "$FUNC" --query Handler || true
+          echo '```'
+          STREAM=$(aws logs describe-log-streams --log-group-name "/aws/lambda/$FUNC" \
+            --order-by LastEventTime --descending --max-items 1 \
+            --query 'logStreams[0].logStreamName' --output text 2>/dev/null || true)
+          if [ -n "${STREAM:-}" ] && [ "$STREAM" != "None" ]; then
+            echo "- Log stream: \`$STREAM\`"
+            echo
+            echo "##### Last 80 log lines"
+            echo '```'
+            aws logs get-log-events --log-group-name "/aws/lambda/$FUNC" --log-stream-name "$STREAM" \
+              --limit 80 --query 'events[].message' --output text || true
+            echo '```'
+          fi
+        } > "$TMP"
+
+        REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+        NUM=$(gh issue list --state open --label 'from:smoke' --label "$PATH_LABEL" \
+          --json number,createdAt --jq 'sort_by(.createdAt)|last|.number' 2>/dev/null || true)
+        if [ -z "${NUM:-}" ]; then
+          LABELS=$(jq -c --arg p "$PATH_LABEL" '["from:smoke","agent:SRE_AUTOFIX",$p]')
+          RESP=$(gh api -X POST "repos/$REPO/issues" -f title="$TITLE" -f labels="$LABELS" --raw-field body="$(cat "$TMP")")
+          NUM=$(echo "$RESP" | jq -r .number)
+          URL=$(echo "$RESP" | jq -r .html_url)
+          echo "Opened smoke issue #$NUM ($URL)"
+        else
+          gh issue comment "$NUM" --body-file "$TMP" >/dev/null || true
+          URL=$(gh issue view "$NUM" --json url --jq .url 2>/dev/null || true)
+          echo "Updated smoke issue #$NUM ($URL)"
+        fi
+        rm -f "$TMP"
+
+        # Trigger agent-exec by NAME
+        gh workflow run agent-exec -F issue="$NUM" || true

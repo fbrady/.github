@@ -1,0 +1,28 @@
+name: selfheal-print-endpoint
+on:
+  workflow_call:
+    inputs:
+      service: { required: true, type: string }
+      stage:   { required: true, type: string, default: "dev1" }
+permissions: { id-token: write, contents: read }
+jobs:
+  info:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::356975127435:role/GitHubOIDC-ServerlessDeploy
+          aws-region: eu-west-1
+      - name: Resolve API by name
+        run: |
+          SVC="${{ inputs.service }}"
+          API_SVC="${SVC//_/-}"
+          NAME="dtsbuz-${API_SVC}-${{ inputs.stage }}"
+          echo "Looking for $NAME"
+          ID=$(aws apigatewayv2 get-apis --query "Items[?Name==\`${NAME}\`].ApiId | [0]" --output text)
+          if [ "$ID" = "None" ] || [ -z "$ID" ]; then
+            echo "No exact match; all APIs:"; aws apigatewayv2 get-apis --query "Items[].{Name:Name,Id:ApiId}" --output table || true
+            exit 2
+          fi
+          echo "API_ID: $ID"
+          echo "Base URL: https://$ID.execute-api.eu-west-1.amazonaws.com"

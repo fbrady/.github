@@ -1,0 +1,105 @@
+name: Reusable Policy Gate
+
+on:
+  workflow_call:
+    inputs:
+      require_issue_link:
+        description: "Whether a PR must link to a bug issue or feature spec"
+        required: true
+        type: boolean
+      ops_repo:
+        description: "Full repo name for ops docs (e.g. fbrady/lunchteam-ops)"
+        required: true
+        type: string
+
+jobs:
+  policy:
+    name: Policy Gate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Enforce PR policy
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.pull_request.body || "";
+
+            function fail(msg) {
+              core.setFailed(msg);
+            }
+
+            /*
+             * ------------------------------------------------------------
+             * 1. Bug / Feature link enforcement (MANDATORY)
+             * ------------------------------------------------------------
+             */
+
+            const hasBugLink =
+              body.match(/Fixes:\s*https:\/\/github\.com\/.+\/issues\/\d+/i);
+
+            const hasFeatureLink =
+              body.match(/Feature:\s*https:\/\/github\.com\/.+\/features\//i);
+
+            if (!hasBugLink && !hasFeatureLink) {
+              fail(
+                "PR must link to a bug issue (Fixes: <issue URL>) or a feature folder (Feature: <URL>)."
+              );
+            }
+
+            /*
+             * ------------------------------------------------------------
+             * 2. Knowledge Promotion acknowledgement (MANDATORY)
+             * ------------------------------------------------------------
+             */
+
+            if (!body.match(/##\s*Knowledge Promotion/i)) {
+              fail(
+                "PR must include a 'Knowledge Promotion' section acknowledging new or absent system knowledge."
+              );
+            }
+
+            /*
+             * ------------------------------------------------------------
+             * 3. Ops documentation reference for ops-touching changes
+             * ------------------------------------------------------------
+             * This is a heuristic guardrail. If the PR body mentions
+             * infra / env / DB concepts, it must reference lunchteam-ops.
+             */
+
+            const opsKeywords = [
+              "DATABASE",
+              "DB",
+              "RDS",
+              "MYSQL",
+              "POSTGRES",
+              "ENV",
+              "ENVIRONMENT",
+              "SSH",
+              "BASTION",
+              "INFRA",
+              "DEPLOY",
+              "PRODUCTION",
+              "PROD"
+            ];
+
+            const mentionsOpsConcept =
+              opsKeywords.some(k =>
+                new RegExp(`\\b${k}\\b`, "i").test(body)
+              );
+
+            if (mentionsOpsConcept) {
+              const opsRepoName = "${{ inputs.ops_repo }}";
+              if (!body.includes(opsRepoName)) {
+                fail(
+                  "Ops-related PR detected but no reference to lunchteam-ops documentation found."
+                );
+              }
+            }
+
+            /*
+             * ------------------------------------------------------------
+             * 4. Final pass
+             * ------------------------------------------------------------
+             */
+
+            core.info("Policy Gate checks passed.");

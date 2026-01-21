@@ -1,0 +1,115 @@
+name: Bug Report
+description: Report a bug affecting Lunch.Team services
+title: "[BUG] <short description>"
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Bug Report
+        Bugs are treated as cost- or risk-reduction features.
+        All fields below are required.
+
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: One-sentence description of the bug.
+      placeholder: Orders intermittently fail after cutoff time
+    validations:
+      required: true
+
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed Behaviour
+      description: What actually happens.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behaviour
+      description: What should happen instead.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: classification
+    attributes:
+      label: Bug Classification
+      description: Select the primary class of this bug.
+      options:
+        - Operational (infra, env, prod behaviour)
+        - Contract (API/schema mismatch)
+        - Logic (business rules)
+        - Data (unexpected or corrupt data)
+        - UI/UX
+    validations:
+      required: true
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Environment
+      description: Where does this bug occur?
+      options:
+        - Production
+        - Staging
+        - Both
+        - Unknown
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: impact
+    attributes:
+      label: Impact
+      description: Select all that apply.
+      options:
+        - label: Increased ops / support cost
+        - label: Revenue loss
+        - label: Refunds or credits required
+        - label: Customer trust / SLA risk
+        - label: System instability
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction Steps
+      description: Steps to reliably reproduce, if known.
+    validations:
+      required: false
+
+  - type: textarea
+    id: investigation
+    attributes:
+      label: Investigation Log
+      description: |
+        Record all attempts to diagnose or fix this bug.
+        Each attempt must be logged before a new fix is tried.
+      placeholder: |
+        Attempt 1:
+        - Hypothesis:
+        - Change:
+        - Result:
+
+        Attempt 2:
+        - Hypothesis:
+        - Change:
+        - Result:
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: knowledge
+    attributes:
+      label: Knowledge Promotion
+      description: Confirm handling of any new system knowledge.
+      options:
+        - label: No new operational or safety knowledge discovered
+        - label: New knowledge documented in lunchteam-ops (link in PR)
+        - label: New knowledge tracked in KNOWLEDGE_DEBT.md
+    validations:
+      required: true
